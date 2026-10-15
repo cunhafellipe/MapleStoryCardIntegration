@@ -8,6 +8,9 @@ const status = document.getElementById("cardStatus"),
   controls = [...document.querySelectorAll(".pair-controls button, .pair-controls input")];
 for (const control of controls) control.disabled = true;
 retry.addEventListener("click", () => location.reload());
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) location.reload();
+});
 async function start() {
 const panorama = document.getElementById("panorama"),
   slider = document.getElementById("turn"),

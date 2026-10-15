@@ -49,7 +49,7 @@ async function inspect(load) {
     document.getElementById("angle").value = "0";
     await view.ready;
   } catch (error) {
-    viewer.textContent = error.message;
+    if (revision === generation) viewer.textContent = error.message;
   }
 }
 for (const item of catalog) {
@@ -104,3 +104,6 @@ window.addEventListener(
   },
   { once: true },
 );
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) location.reload();
+});
