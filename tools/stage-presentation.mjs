@@ -1,5 +1,13 @@
 /** Assemble deployment output from the reusable source. Never edit bundled copies. */
-import { cp, mkdir, writeFile, readdir, readFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  writeFile,
+  readdir,
+  readFile,
+  lstat,
+  realpath,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
@@ -12,6 +20,56 @@ const framework = path.resolve(
     "../../DigitalCardFramework/src/presentation",
   ),
   dist = path.resolve(distArg);
+const content = await realpath(path.resolve(contentArg)),
+  catalog = JSON.parse(
+    await readFile(path.join(content, "cards.json"), "utf8"),
+  );
+if (!Array.isArray(catalog)) throw new Error("Expected a card catalog array");
+function contained(root, target) {
+  const relative = path.relative(root, target);
+  return (
+    relative === "" ||
+    (!path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(".." + path.sep))
+  );
+}
+if (contained(content, dist) || contained(dist, content))
+  throw new Error("Content and deployment folders must not overlap");
+function contentPath(name) {
+  if (
+    typeof name !== "string" ||
+    !name
+      .split("/")
+      .every(
+        (part) =>
+          /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(part) && !part.endsWith("."),
+      )
+  )
+    throw new Error("Invalid card content path");
+  return path.join(content, ...name.split("/"));
+}
+async function validateTree(file) {
+  const stat = await lstat(file);
+  if (stat.isSymbolicLink() || !contained(content, await realpath(file)))
+    throw new Error("Card content links are not supported");
+  if (stat.isDirectory()) {
+    for (const name of await readdir(file))
+      await validateTree(path.join(file, name));
+  } else if (!stat.isFile()) throw new Error("Expected regular card content");
+  return stat;
+}
+await validateTree(path.join(content, "cards.json"));
+for (const card of catalog) {
+  if (!card || typeof card.id !== "string")
+    throw new Error("Invalid card catalog entry");
+  const directory =
+    card.directory ?? (card.id.endsWith("night") ? "night" : "day");
+  if (!(await validateTree(contentPath(directory))).isDirectory())
+    throw new Error("Expected a card directory");
+  if (card.archive && !(await validateTree(contentPath(card.archive))).isFile())
+    throw new Error("Expected a card archive");
+}
 await mkdir(path.join(dist, "player"), { recursive: true });
 const files = [];
 for (const name of await readdir(framework)) {
@@ -38,10 +96,6 @@ for (const name of await readdir(framework)) {
     });
   }
 }
-const content = path.resolve(contentArg),
-  catalog = JSON.parse(
-    await readFile(path.join(content, "cards.json"), "utf8"),
-  );
 await mkdir(path.join(dist, "cards"), { recursive: true });
 await cp(
   path.join(content, "cards.json"),
@@ -88,6 +142,24 @@ const { build } = await import(
     new URL("file:///" + framework.replaceAll("\\", "/") + "/package.json"),
   )
 );
+// Bundle the browser entry points so dependencies outside presentation are included.
+await build({
+  entryPoints: [
+    "index.js",
+    "player.js",
+    "resolver.js",
+    "package.js",
+    "studio.js",
+  ].map((name) => path.join(framework, name)),
+  outdir: path.join(dist, "player"),
+  bundle: true,
+  splitting: true,
+  format: "esm",
+  platform: "browser",
+  target: "es2022",
+  minify: true,
+  external: ["node:zlib"],
+});
 await build({
   entryPoints: [path.join(framework, "adapters.js")],
   outfile: path.join(dist, "player", "adapters-bundle.js"),
